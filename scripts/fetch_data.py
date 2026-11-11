@@ -68,7 +68,7 @@ def call(endpoint_cls, label, **kwargs):
     last = None
     for attempt in range(4):
         try:
-            ep = endpoint_cls(timeout=TIMEOUT, headers=HEADERS, proxy=PROXY, **kwargs)
+            ep = endpoint_cls(timeout=TIMEOUT, proxy=PROXY, **kwargs)
             data = ep.get_dict()
             time.sleep(PAUSE)
             return data
@@ -394,17 +394,13 @@ def main():
     prev = season_str(datetime(int(season[:4]) - 1, 12, 1))
     log(f"Season {season} (previous {prev})")
 
-    # Quick reachability check so a blocked machine fails in seconds, not 40 minutes
+    # Quick reachability check so a blocked machine fails fast instead of retrying for ages
     try:
-        requests.get("https://stats.nba.com/stats/leaguegamelog",
-                     params={"Season": season, "SeasonType": "Regular Season", "PlayerOrTeam": "T",
-                             "LeagueID": "00", "Direction": "DESC", "Sorter": "DATE", "Counter": 0},
-                     headers=HEADERS, timeout=25,
-                     proxies={"https": PROXY, "http": PROXY} if PROXY else None).raise_for_status()
+        leaguedashteamstats.LeagueDashTeamStats(season=season, timeout=45, proxy=PROXY).get_dict()
         log("NBA.com reachable")
     except Exception as e:  # noqa: BLE001
-        log(f"NBA.com is not responding from this machine ({type(e).__name__}). "
-            "It blocks most cloud servers — run this script on your own computer instead.")
+        log(f"NBA.com did not respond ({type(e).__name__}: {e}). "
+            "If this keeps happening on your own computer, try again in a few minutes or turn off any VPN.")
         sys.exit(2)
 
     positions = get_positions(season) or {}
