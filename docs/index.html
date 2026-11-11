@@ -205,8 +205,9 @@ async function getJSON(name){
   try{const r=await fetch('data/'+name+'?v='+Date.now()); if(!r.ok) return null; return await r.json()}catch(e){return null}
 }
 async function load(){
-  const [meta,players,teams,logs,sched,matchups,inj,calib]=await Promise.all(
-    ['meta.json','players.json','teams.json','gamelogs.json','schedule.json','matchups.json','injuries.json','calibration.json'].map(getJSON));
+  const [meta,players,teams,logs,sched,matchups,inj,calib,oppBt]=await Promise.all(
+    ['meta.json','players.json','teams.json','gamelogs.json','schedule.json','matchups.json','injuries.json','calibration.json','opp_backtest.json'].map(getJSON));
+  S.oppBt=oppBt;
   S.meta=meta; S.players=players||[]; S.teams=teams||[]; S.logs=logs; S.sched=sched||[]; S.matchups=matchups; S.calib=calib;
   setInjuries(inj?.list||[], inj?.updated, 'saved');
   loadLiveInjuries();
@@ -520,7 +521,7 @@ function pricingPanel(p,oppT,st,line,games,mates){
     <li>Expected minutes: <b>${fmt(pr.baseMinutes)}</b> (recent games weighted most)${pr.factors.minutes!==1?` → <b>${fmt(pr.minutes)}</b> after teammates out`:''}</li>
     <li>${STATS[st].label} per minute: <b>${fmt(pr.rate,3)}</b> over ${pr.sample} games (${pr.sampleCurrent} this season; last season counts 60%)</li>
     ${mateLines}
-    <li>Opponent: ${oppT?`${esc(oppT.abbr)} vs ${esc(p.grp||'?')} ×${fmt(pr.factors.opp,3)}`+(of.parts.length?` <span class="muted">(${of.parts.map(x=>`${x.part.toUpperCase()} allowed ${fmt(x.allowed)} vs avg ${fmt(x.league)}`).join(', ')}; shrunk over ${of.gp} games)</span>`:''):'none selected'}</li>
+    <li>Opponent: ${oppT?`${esc(oppT.abbr)} vs ${esc(p.grp||'?')} ×${fmt(pr.factors.opp,3)}`+(of.parts.length?` <span class="muted">(${of.parts.map(x=>`${x.part.toUpperCase()} allowed ${fmt(x.allowed)} per 48 ${esc(p.grp)}-minutes vs avg ${fmt(x.league)}`).join(', ')}; shrunk over ${of.gp} games, capped at ±10%)</span>`:''):'none selected'}</li>
     <li>Projection = minutes × rate × adjustments = <b>${fmt(pr.mean,2)}</b></li>
     <li>Spread: game-to-game variation from his logs, +15% for uncertainty, plus a 5% chance of a "dud" game (injury exit, foul trouble, blowout). Both tuned so that "95%" really hits ~95% in backtests.</li>
     <li>P(over ${line}) = <b>${pct(pb.over,1)}</b>${pb.push>0.001?`, push ${pct(pb.push,1)}`:''}. EV = P(win) × (odds − 1) − P(lose).</li>
@@ -910,7 +911,11 @@ function viewModel(){
   </div>
   <h2 style="margin-top:16px">By stat (main lines)</h2><div class="tw"><table><thead><tr><th class="l">Stat</th><th>Model error</th><th>L10 hit-rate error</th><th>Better by</th></tr></thead><tbody>
   ${Object.entries(c.byStat).map(([k,s])=>`<tr><td class="l" style="font-family:Inter">${k==='FG3M'?'3PM':k}</td><td>${s.brier.toFixed(4)}</td><td>${s.brierBaseline.toFixed(4)}</td><td class="up">${imp(s)}%</td></tr>`).join('')}</tbody></table></div>
-  <p class="note">Brier score = average squared error of the probability (lower is better). Backtest excludes opponent and teammate-out adjustments, which can't be reconstructed for past games, so it tests the core projection. Last run ${c.generated?new Date(c.generated).toLocaleDateString('en-AU'):''}.</p></div></div>
+  ${S.oppBt?(()=>{const none=S.oppBt.find(x=>!x.cfg), used=S.oppBt.find(x=>x.cfg&&x.cfg[0]===30&&x.cfg[1]===0.1), old=S.oppBt.find(x=>x.cfg&&x.cfg[0]===15);
+    return `<h2 style="margin-top:16px">Opponent adjustment test</h2><div class="tw"><table><thead><tr><th class="l">Setting</th><th>Error (main lines)</th></tr></thead><tbody>
+    ${S.oppBt.map(x=>`<tr><td class="l" style="font-family:Inter">${esc(x.name)}${x===used?' <span class="chip soft">in use</span>':''}</td><td>${x.brier.toFixed(5)}</td></tr>`).join('')}</tbody></table></div>
+    <p class="note">Defence-vs-position rebuilt day by day from earlier games only. It helps, but only a little (${((1-used.brier/none.brier)*100).toFixed(2)}% lower error), so it's capped at ±10%.</p>`})():''}
+  <p class="note">Brier score = average squared error of the probability (lower is better). The calibration chart tests the core projection; the opponent adjustment is tested separately above. Teammate-out adjustments can't be reconstructed for past games. Last run ${c.generated?new Date(c.generated).toLocaleDateString('en-AU'):''}.</p></div></div>
   <div class="card" style="margin-top:14px"><h2>What the model does and doesn't know</h2><div class="grid g2" style="gap:24px">
     <div><b class="up">Accounts for</b><ul class="t2"><li>Recent minutes (fast-reacting) and per-minute production (two seasons, recent weighted)</li><li>Opponent defence vs the player's position, shrunk for small samples</li><li>Teammates ruled out, using his real past games without them</li><li>Game-to-game spread, plus the chance of a dud game (injury exit, foul trouble, blowout)</li><li>Injury report: live from ESPN each time you open the site</li></ul></div>
     <div><b class="down">Doesn't know</b><ul class="t2"><li>Late scratches announced after the report, and confirmed starting lineups</li><li>Minutes restrictions, coach decisions, trades in the last day</li><li>Motivation, travel, altitude, referee tendencies</li><li>Live betting market moves — if the line has moved a lot, the market probably knows something</li></ul></div></div></div>`;

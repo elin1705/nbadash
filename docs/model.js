@@ -130,7 +130,8 @@
     lastSeasonWeight: 0.6,
     maxGames: 40,
     minMinutes: 6,      // ignore near-DNP cameo games
-    oppShrink: 15,      // DvP sample shrink (games)
+    oppShrink: 30,      // DvP sample shrink (games) — tuned by walk-forward backtest
+    oppCap: 0.10,       // opponent adjustment capped at ±10% (backtest: bigger swings didn't help)
     withoutShrink: 12,  // teammate-out sample shrink (games)
     varInflate: 1.15,   // extra spread on top of the player's own game-to-game spread
     dudRate: 0.05,      // chance of a 'dud' game (injury exit, foul trouble, blowout benching)
@@ -232,25 +233,33 @@
     };
   }
 
-  /** Opponent multiplier from defence-vs-position, shrunk toward 1 for small samples. */
+  /**
+   * Opponent multiplier from defence-vs-position.
+   * Uses stat allowed PER MINUTE played by that position group, so teams that simply faced more
+   * "C"-labelled minutes don't look worse than they are. Shrunk toward 1 for small samples.
+   */
   function opponentFactor(stat, grp, oppTeam, allTeams, playerRates, shrink = DEFAULTS.oppShrink) {
     const span = 'season';
     const d = oppTeam && oppTeam.dvp && oppTeam.dvp[span] && oppTeam.dvp[span][grp];
-    if (!d || !grp) return { factor: 1, parts: [] };
+    if (!d || !grp || !d.MIN) return { factor: 1, parts: [] };
     const gp = oppTeam.dvp[span].gp || 0;
     const k = gp / (gp + shrink);
     const parts = [];
     let num = 0, den = 0;
     for (const p of STATS[stat].parts) {
       const key = DVP_KEY[p];
-      if (!key) continue;
-      const vals = allTeams.map((t) => t.dvp && t.dvp[span] && t.dvp[span][grp] && t.dvp[span][grp][key]).filter((v) => v != null);
-      const lg = vals.reduce((a, b) => a + b, 0) / (vals.length || 1);
-      if (!lg || d[key] == null) continue;
-      const f = 1 + (d[key] / lg - 1) * k;
+      if (!key || d[key] == null) continue;
+      let lgStat = 0, lgMin = 0;
+      for (const t of allTeams) {
+        const x = t.dvp && t.dvp[span] && t.dvp[span][grp];
+        if (x && x.MIN && x[key] != null) { lgStat += x[key]; lgMin += x.MIN; }
+      }
+      if (!lgStat || !lgMin) continue;
+      const raw = (d[key] / d.MIN) / (lgStat / lgMin);
+      const f = Math.min(1 + DEFAULTS.oppCap, Math.max(1 - DEFAULTS.oppCap, 1 + (raw - 1) * k));
       const w = (playerRates && playerRates[p]) || 1;
       num += f * w; den += w;
-      parts.push({ part: p, allowed: d[key], league: lg, raw: d[key] / lg, factor: f });
+      parts.push({ part: p, allowed: (d[key] / d.MIN) * 48, league: (lgStat / lgMin) * 48, raw, factor: f, per48: true });
     }
     return { factor: den ? num / den : 1, parts, gp };
   }
@@ -294,13 +303,15 @@
         const prior = g.slice(i + 1);
         if (prior[0].min < 20 && prior.length < 15) continue;
         for (const stat of stats) {
-          const pr = project(prior, stat, opts.model || {});
-          if (!pr || pr.mean < 0.5) continue;
+          const base = project(prior, stat, opts.model || {});
+          if (!base || base.mean < 0.5) continue;
+          const of = opts.oppFn ? opts.oppFn(pid, game, stat) : 1;
+          const pr = of === 1 ? base : project(prior, stat, Object.assign({}, opts.model || {}, { oppFactor: of }));
           const actual = statValue(stat, game);
           // a "main" line near the projection, plus a low alt line (filler-leg territory)
           const lines = [
-            ['main', Math.round(pr.mean - 0.5) + 0.5],
-            ['alt', Math.max(0.5, Math.floor(pr.mean * 0.55) - 0.5)],
+            ['main', Math.round(base.mean - 0.5) + 0.5],
+            ['alt', Math.max(0.5, Math.floor(base.mean * 0.55) - 0.5)],
           ];
           for (const [kind, line] of lines) {
             const p = projProbs(line, pr).over;
