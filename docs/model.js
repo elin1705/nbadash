@@ -125,9 +125,9 @@
 
   // ------------------------------------------------------------ projection
   const DEFAULTS = {
-    rateHalfLife: 10,   // games: how fast older per-minute production fades
+    rateHalfLife: 16,   // games: how fast older per-minute production fades (backtest-tuned)
     minHalfLife: 4,     // games: minutes react faster to role changes
-    lastSeasonWeight: 0.6,
+    lastSeasonWeight: 1.0, // backtest: last season predicts as well as this season's early games
     maxGames: 40,
     minMinutes: 6,      // ignore near-DNP cameo games
     oppShrink: 30,      // DvP sample shrink (games) — tuned by walk-forward backtest

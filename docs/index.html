@@ -519,7 +519,7 @@ function pricingPanel(p,oppT,st,line,games,mates){
   const mateLines=pr.mates.filter(m=>m.n).map(m=>`<li>Without ${esc(m.name)} (${m.n} games): minutes ×${fmt(m.minFactor,2)}, ${STATS[st].label.toLowerCase()} per minute ×${fmt(m.rateFactor,2)} <span class="muted">(raw ×${fmt(m.minRatio,2)} / ×${fmt(m.rateRatio,2)}, shrunk for sample size)</span></li>`).join('');
   h+=`<details class="how"><summary>How this was calculated</summary><ol>
     <li>Expected minutes: <b>${fmt(pr.baseMinutes)}</b> (recent games weighted most)${pr.factors.minutes!==1?` → <b>${fmt(pr.minutes)}</b> after teammates out`:''}</li>
-    <li>${STATS[st].label} per minute: <b>${fmt(pr.rate,3)}</b> over ${pr.sample} games (${pr.sampleCurrent} this season; last season counts 60%)</li>
+    <li>${STATS[st].label} per minute: <b>${fmt(pr.rate,3)}</b> over ${pr.sample} games (${pr.sampleCurrent} this season; older games fade gradually)</li>
     ${mateLines}
     <li>Opponent: ${oppT?`${esc(oppT.abbr)} vs ${esc(p.grp||'?')} ×${fmt(pr.factors.opp,3)}`+(of.parts.length?` <span class="muted">(${of.parts.map(x=>`${x.part.toUpperCase()} allowed ${fmt(x.allowed)} per 48 ${esc(p.grp)}-minutes vs avg ${fmt(x.league)}`).join(', ')}; shrunk over ${of.gp} games, capped at ±10%)</span>`:''):'none selected'}</li>
     <li>Projection = minutes × rate × adjustments = <b>${fmt(pr.mean,2)}</b></li>
