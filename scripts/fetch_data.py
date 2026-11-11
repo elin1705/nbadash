@@ -302,6 +302,32 @@ def _schedule_scoreboard(now):
     return games
 
 
+ESPN_ABBR = {"GS": "GSW", "NY": "NYK", "NO": "NOP", "SA": "SAS", "UTAH": "UTA", "WSH": "WAS"}
+
+
+@section("Injuries")
+def get_injuries():
+    url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
+    resp = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": HEADERS["User-Agent"]},
+                        proxies={"https": PROXY, "http": PROXY} if PROXY else None)
+    resp.raise_for_status()
+    out = []
+    for team in resp.json().get("injuries", []):
+        for i in team.get("injuries", []):
+            a = i.get("athlete") or {}
+            abbr = (a.get("team") or {}).get("abbreviation")
+            out.append({
+                "name": a.get("displayName"),
+                "team": ESPN_ABBR.get(abbr, abbr),
+                "status": i.get("status"),
+                "comment": i.get("shortComment"),
+                "date": i.get("date"),
+                "returnDate": (i.get("details") or {}).get("returnDate"),
+                "type": (i.get("details") or {}).get("type"),
+            })
+    return out
+
+
 @section("Schedule")
 def get_schedule():
     now = datetime.now(timezone.utc)
@@ -445,6 +471,7 @@ def main():
     logs_now = get_gamelogs(season) or []
     logs_prev = get_gamelogs(prev) or []
     schedule = get_schedule()
+    injuries = get_injuries()
 
     if ps is None and not logs_now:
         log("Nothing could be fetched — NBA.com is probably blocking this machine.")
@@ -518,6 +545,8 @@ def main():
 
     if schedule is not None:
         save("schedule.json", schedule)
+    if injuries is not None:
+        save("injuries.json", {"updated": now.isoformat(), "list": injuries})
 
     # matchups last: slowest and the most optional
     team_ids = sorted(t for t in team_out if t)

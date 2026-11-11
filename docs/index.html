@@ -122,6 +122,14 @@ svg text{font-family:Inter,system-ui,sans-serif}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-2);margin-top:6px;align-items:center}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 .grad{width:120px;height:8px;border-radius:4px;display:inline-block;vertical-align:middle;margin:0 6px}
+.inj{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 5px;border-radius:5px;vertical-align:1px;font-family:Inter,sans-serif;letter-spacing:.02em}
+.inj.out{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad-text)}
+.inj.q{background:color-mix(in srgb,var(--warn) 25%,transparent);color:var(--text)}
+.flag{display:inline-flex;width:20px;height:20px;align-items:center;justify-content:center;border-radius:6px;font-size:11px;font-weight:700;margin-right:3px;font-family:Inter}
+.flag.w{background:color-mix(in srgb,var(--warn) 28%,transparent)} .flag.q{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad-text)} .flag.i{background:var(--accent-soft);color:var(--accent)}
+.verdict{margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--surface-2);font-weight:500}
+.how{margin-top:12px;font-size:13px;color:var(--text-2)} .how summary{cursor:pointer;font-weight:600;color:var(--text)} .how li{margin:4px 0}
+.pill .inj{margin-left:2px}
 #tip{position:fixed;pointer-events:none;z-index:50;background:var(--text);color:var(--surface);padding:7px 9px;border-radius:8px;font-size:12px;line-height:1.4;opacity:0;transition:opacity .08s;max-width:240px}
 #tip b{font-weight:600}
 .note{font-size:12px;color:var(--muted);margin-top:8px}
@@ -135,6 +143,8 @@ svg text{font-family:Inter,system-ui,sans-serif}
     <a href="#/today" data-r="today">Today</a>
     <a href="#/player" data-r="player">Players</a>
     <a href="#/teams" data-r="teams">Teams &amp; DvP</a>
+    <a href="#/safe" data-r="safe">Safe legs</a>
+    <a href="#/model" data-r="model">Model check</a>
   </nav>
   <div class="spacer"></div>
   <span class="updated" id="updated"></span>
@@ -143,18 +153,14 @@ svg text{font-family:Inter,system-ui,sans-serif}
 <main id="app"><div class="empty">Loading data…</div></main>
 <div id="tip"></div>
 
+<script src="model.js"></script>
 <script>
 // ------------------------------------------------------------------ state
 const S = { players:[], teams:[], logs:null, sched:[], matchups:null, meta:null,
   byId:{}, teamById:{}, teamByAbbr:{}, leagueZone:{} };
 const TZ = 'Australia/Melbourne';
-const STATS = {
-  PTS:{label:'Points', f:g=>g.pts}, REB:{label:'Rebounds', f:g=>g.reb}, AST:{label:'Assists', f:g=>g.ast},
-  FG3M:{label:'3PM', f:g=>g.fg3m}, PRA:{label:'Pts+Reb+Ast', f:g=>g.pts+g.reb+g.ast},
-  PR:{label:'Pts+Reb', f:g=>g.pts+g.reb}, PA:{label:'Pts+Ast', f:g=>g.pts+g.ast}, RA:{label:'Reb+Ast', f:g=>g.reb+g.ast},
-  STL:{label:'Steals', f:g=>g.stl}, BLK:{label:'Blocks', f:g=>g.blk}, SB:{label:'Stl+Blk', f:g=>g.stl+g.blk},
-  TOV:{label:'Turnovers', f:g=>g.tov}, FGA:{label:'FG attempts', f:g=>g.fga}, MIN:{label:'Minutes', f:g=>g.min}
-};
+// stat definitions come from model.js so the site and the tested model always agree
+const STATS = Object.fromEntries(Object.entries(Model.STATS).map(([k,v])=>[k,{label:v.label,f:g=>Model.statValue(k,g)}]));
 const ZONES = ['Restricted Area','In The Paint (Non-RA)','Mid-Range','Left Corner 3','Right Corner 3','Above the Break 3'];
 const ZSHORT = {'Restricted Area':'Rim','In The Paint (Non-RA)':'Paint','Mid-Range':'Mid','Left Corner 3':'L Corner','Right Corner 3':'R Corner','Above the Break 3':'Above Break 3'};
 
@@ -187,9 +193,11 @@ async function getJSON(name){
   try{const r=await fetch('data/'+name+'?v='+Date.now()); if(!r.ok) return null; return await r.json()}catch(e){return null}
 }
 async function load(){
-  const [meta,players,teams,logs,sched,matchups]=await Promise.all(
-    ['meta.json','players.json','teams.json','gamelogs.json','schedule.json','matchups.json'].map(getJSON));
-  S.meta=meta; S.players=players||[]; S.teams=teams||[]; S.logs=logs; S.sched=sched||[]; S.matchups=matchups;
+  const [meta,players,teams,logs,sched,matchups,inj,calib]=await Promise.all(
+    ['meta.json','players.json','teams.json','gamelogs.json','schedule.json','matchups.json','injuries.json','calibration.json'].map(getJSON));
+  S.meta=meta; S.players=players||[]; S.teams=teams||[]; S.logs=logs; S.sched=sched||[]; S.matchups=matchups; S.calib=calib;
+  setInjuries(inj?.list||[], inj?.updated, 'saved');
+  loadLiveInjuries();
   S.players.forEach(p=>S.byId[p.id]=p);
   S.teams.forEach(t=>{S.teamById[t.id]=t; if(t.abbr) S.teamByAbbr[t.abbr]=t});
   // league average allowed FG% by zone
@@ -200,6 +208,55 @@ async function load(){
     $('#updated').textContent='Updated '+d.toLocaleString('en-AU',{timeZone:TZ,weekday:'short',hour:'numeric',minute:'2-digit'});
   }
   route();
+}
+
+// ------------------------------------------------------------------ injuries
+const ESPN_ABBR={GS:'GSW',NY:'NYK',NO:'NOP',SA:'SAS',UTAH:'UTA',WSH:'WAS'};
+const normName=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase()
+  .replace(/[.'’-]/g,'').replace(/\b(jr|sr|ii|iii|iv|v)\b/g,'').replace(/\s+/g,' ').trim();
+function setInjuries(list, updated, source){
+  S.inj={}; S.injUpdated=updated; S.injSource=source;
+  const byName={}; S.players.forEach(p=>{(byName[normName(p.name)]=byName[normName(p.name)]||[]).push(p)});
+  list.forEach(i=>{const c=byName[normName(i.name)]; if(!c) return;
+    const p=c.length===1?c[0]:(c.find(x=>x.team===i.team)||c[0]); S.inj[p.id]=i});
+}
+async function loadLiveInjuries(){
+  try{
+    const r=await fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries',{cache:'no-store'});
+    if(!r.ok) return; const d=await r.json(); const list=[];
+    (d.injuries||[]).forEach(t=>(t.injuries||[]).forEach(i=>{const a=i.athlete||{}; const ab=a.team?.abbreviation;
+      list.push({name:a.displayName,team:ESPN_ABBR[ab]||ab,status:i.status,comment:i.shortComment,date:i.date,returnDate:i.details?.returnDate,type:i.details?.type})}));
+    if(list.length){setInjuries(list,new Date().toISOString(),'live'); route()}
+  }catch(e){/* offline or blocked: keep the saved copy */}
+}
+const injOf=pid=>S.inj?.[pid];
+const isOut=pid=>/^(out|doubtful)/i.test(injOf(pid)?.status||'');
+const isRisky=pid=>/^(questionable|day-to-day|probable|gtd)/i.test(injOf(pid)?.status||'');
+function injBadge(pid){
+  const i=injOf(pid); if(!i) return '';
+  const cls=/^out/i.test(i.status)?'out':/^doubtful/i.test(i.status)?'out':'q';
+  const short=/^out/i.test(i.status)?'OUT':/^doubtful/i.test(i.status)?'DOUBT':/^questionable/i.test(i.status)?'Q':/^probable/i.test(i.status)?'PROB':'DTD';
+  return `<span class="inj ${cls}" data-tip="<b>${esc(i.status)}</b>${i.type?' · '+esc(i.type):''}<br>${esc(i.comment||'')}">${short}</span>`;
+}
+/** Teammates ruled out (Out/Doubtful) for a player, as model inputs. */
+function matesOutFor(p, sel){
+  const mates=S.players.filter(x=>x.teamId===p.teamId&&x.id!==p.id&&(x.season?.MIN||0)>=12);
+  const chosen=sel? mates.filter(x=>sel.has(x.id)) : mates.filter(x=>isOut(x.id));
+  return chosen.map(x=>({id:x.id,name:x.name,games:allGames(x.id)}));
+}
+function oppFactorFor(p,oppT,stat,games){
+  if(!oppT) return {factor:1,parts:[]};
+  const g=(games||allGames(p.id)).filter(x=>x.season==='current').slice(0,15);
+  const rates={}; ['pts','reb','ast','fg3m','stl','blk','tov','fga'].forEach(k=>rates[k]=g.reduce((a,x)=>a+(x[k]||0),0)/(g.length||1)||0.01);
+  return Model.opponentFactor(stat,p.grp,oppT,S.teams,rates);
+}
+function teamLastPlayed(abbr){
+  let last=null; S.players.forEach(p=>{if(p.team!==abbr) return; const g=S.logs?.current?.[p.id]?.[0]; if(g&&(!last||g[0]>last)) last=g[0]}); return last;
+}
+function isB2B(g,teamId){
+  const t=S.teamById[teamId]; if(!t) return false; const last=teamLastPlayed(t.abbr); if(!last) return false;
+  const etDate=new Date(new Date(g.utc).getTime()-5*3600e3).toISOString().slice(0,10);
+  return (new Date(etDate)-new Date(last))/864e5===1;
 }
 
 function gameRows(pid, which='current'){
@@ -243,6 +300,8 @@ function route(){
   const banner=errBanner();
   if(r==='player') app.innerHTML=banner+viewPlayer(rest[0],rest[1]);
   else if(r==='teams') app.innerHTML=banner+viewTeams(rest[0]);
+  else if(r==='safe') app.innerHTML=banner+viewSafe(rest[0]);
+  else if(r==='model') app.innerHTML=banner+viewModel();
   else app.innerHTML=banner+viewToday(rest[0]);
   bind(r);
 }
@@ -297,7 +356,7 @@ function viewToday(dateArg){
     <div class="seg" id="statSeg">${['PTS','REB','AST','FG3M','PRA','STL','BLK'].map(s=>`<button data-s="${s}" class="${s===st?'on':''}">${s==='FG3M'?'3PM':s}</button>`).join('')}</div></div></div>
     <div class="tw"><table><thead><tr>${th('player','Player','l')}<th class="l">Opp</th>${th('min','MIN')}${th('szn','Season')}${th('l10','L10')}${th('l5','L5')}${th('trend','L5 vs szn')}${th('opps',oppLabel+' L5')}${th('hit','Over szn avg L10')}${th('oppVal','Opp allows')}${th('soft','DvP rank')}</tr></thead>
     <tbody>${rowsArr.map(r=>`<tr class="click" data-href="#/player/${r.p.id}/${r.oppAbbr}">
-      <td class="name">${esc(r.p.name)} <span class="tag">${esc(r.p.team)} · ${esc(r.p.grp||'?')}</span></td>
+      <td class="name">${esc(r.p.name)} ${injBadge(r.p.id)} <span class="tag">${esc(r.p.team)} · ${esc(r.p.grp||'?')}</span></td>
       <td class="l">${r.home?'vs':'@'} ${esc(r.oppAbbr)}</td>
       <td>${fmt(r.p.season?.MIN)}</td><td>${fmt(r.szn)}</td><td>${fmt(r.l10)}</td><td>${fmt(r.l5)}</td>
       <td>${delta(r.l5,r.szn)}</td><td>${fmt(r.opps)}</td><td>${r.hitTxt}</td><td>${fmt(r.dvp?.val)}</td><td>${chip(r.dvp)}</td></tr>`).join('')}</tbody></table></div>
@@ -342,7 +401,7 @@ function viewPlayer(pid,oppArg){
   let oppT = oppArg ? S.teamByAbbr[oppArg] : (ng ? S.teamById[oppOf(ng,p.teamId)] : null);
   const s=p.season||{}, l10=p.l10||{}, l5=p.l5||{};
   const box=(k,label,d=1)=>`<div class="stat"><div class="k">${label}</div><div class="v">${fmt(s[k],d)}</div><div class="d"><span class="muted">L5 ${fmt(l5[k],d)}</span> ${delta(l5[k],s[k],d)}</div></div>`;
-  html+=`<div class="phead"><div><div class="muted">${esc(p.team)} · ${esc(p.pos||'')} ${p.age?'· age '+Math.round(p.age):''}</div><div class="nm">${esc(p.name)}</div></div>
+  html+=`<div class="phead"><div><div class="muted">${esc(p.team)} · ${esc(p.pos||'')} ${p.age?'· age '+Math.round(p.age):''}</div><div class="nm">${esc(p.name)} ${injBadge(p.id)}</div></div>
     <div class="t2">${ng?`Next: ${ng.home===p.teamId?'vs':'@'} <b>${esc(S.teamById[oppOf(ng,p.teamId)]?.abbr||'')}</b> · ${melDay(melDate(ng.utc))} ${melTime(ng.utc)}`:''}</div></div>
   <div class="card" style="margin-bottom:14px"><div class="stats">${box('MIN','Min')}${box('PTS','Pts')}${box('REB','Reb')}${box('AST','Ast')}${box('FG3M','3PM')}${box('FG3A','3PA')}${box('FGA','FGA')}${box('STL','Stl')}${box('BLK','Blk')}${box('TOV','Tov')}
     <div class="stat"><div class="k">Usage</div><div class="v">${pct(p.adv?.USG_PCT,0)}</div><div class="d muted">TS ${pct(p.adv?.TS_PCT,0)}</div></div>
@@ -357,19 +416,36 @@ function viewPlayer(pid,oppArg){
   return html;
 }
 
+let propOdds=store.get('propOdds',{});
+S.mateSel={};
+function getMateSel(p){
+  if(!S.mateSel[p.id]) S.mateSel[p.id]=new Set(S.players.filter(x=>x.teamId===p.teamId&&x.id!==p.id&&isOut(x.id)).map(x=>x.id));
+  return S.mateSel[p.id];
+}
+function defaultLine(p,st){
+  const g=gameRows(p.id).slice(0,15); if(!g.length) return 0.5;
+  const v=g.reduce((a,x)=>a+STATS[st].f(x),0)/g.length; return Math.max(0.5,Math.floor(v)+.5);
+}
 function propTool(p,oppT){
   const st=propStat;
   const games=allGames(p.id);
-  const cur=gameRows(p.id);
+  const cur=gameRows(p.id), prev=gameRows(p.id,'previous');
   const lineKey=p.id+':'+st;
-  const def=(()=>{const o=p.season; if(!o) return 0; const v=st==='PRA'?o.PTS+o.REB+o.AST:st==='PR'?o.PTS+o.REB:st==='PA'?o.PTS+o.AST:st==='RA'?o.REB+o.AST:st==='SB'?o.STL+o.BLK:o[st==='FG3M'?'FG3M':st]; return Math.floor((v||0))+.5})();
-  const line=propLines[lineKey]??def;
+  const line=propLines[lineKey]??defaultLine(p,st);
   const val=g=>STATS[st].f(g);
   const rate=arr=>{if(!arr.length) return null; const h=arr.filter(g=>val(g)>line).length; return {h,n:arr.length,r:h/arr.length}};
   const vsOpp=oppT?games.filter(g=>g.opp===oppT.abbr):[];
-  const blocks=[['L5',rate(cur.slice(0,5))],['L10',rate(cur.slice(0,10))],['L20',rate(games.slice(0,20))],['Season',rate(cur)],
+  // games without the selected teammates
+  const sel=getMateSel(p); const mates=matesOutFor(p,sel);
+  let withoutGames=null;
+  if(mates.length){
+    withoutGames=games;
+    mates.forEach(m=>{const w=Model.withoutSplit(games,m.games,st); withoutGames=w?withoutGames.filter(g=>w.games.some(x=>x.gid===g.gid)):[]});
+  }
+  const blocks=[['L5',rate(cur.slice(0,5))],['L10',rate(cur.slice(0,10))],['L20',rate(games.slice(0,20))],['Season',rate(cur)],['Last season',rate(prev)],
     ['Home',rate(cur.filter(g=>g.home))],['Away',rate(cur.filter(g=>!g.home))],[oppT?`vs ${oppT.abbr}`:'vs opp',rate(vsOpp)]];
-  const hb=([k,r])=>`<div class="stat"><div class="k">${esc(k)}</div><div class="v">${r?Math.round(r.r*100)+'%':'–'}</div><div class="d muted">${r?`${r.h}/${r.n} over`:'no games'}</div></div>`;
+  if(withoutGames) blocks.push([`Without ${mates.map(m=>m.name.split(' ').slice(-1)[0]).join(' + ')}`,rate(withoutGames)]);
+  const hb=([k,r])=>`<div class="stat"><div class="k" title="${esc(k)}" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(k)}</div><div class="v">${r?Math.round(r.r*100)+'%':'–'}</div><div class="d muted">${r?`${r.h}/${r.n} over`:'no games'}</div></div>`;
   const shown=games.slice(0,propN).reverse();
   return `<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:6px">
     <h2 style="margin:0">Prop checker</h2>
@@ -380,7 +456,63 @@ function propTool(p,oppT){
     </div></div>
     <div class="hit">${blocks.map(hb).join('')}</div>
     ${barChart(shown,val,line,oppT)}
-    <div class="legend"><span><i style="background:var(--good)"></i>✓ Over line</span><span><i style="background:var(--bad)"></i>✗ Under line</span><span><i style="background:var(--text-2);height:2px"></i>Line ${line}</span><span class="muted">Darker outline = vs ${oppT?esc(oppT.abbr):'opponent'} · striped = last season</span></div></div>`;
+    <div class="legend"><span><i style="background:var(--good)"></i>✓ Over line</span><span><i style="background:var(--bad)"></i>✗ Under line</span><span><i style="background:var(--text-2);height:2px"></i>Line ${line}</span><span class="muted">Darker outline = vs ${oppT?esc(oppT.abbr):'opponent'} · striped = last season</span></div></div>
+    ${pricingPanel(p,oppT,st,line,games,mates)}`;
+}
+
+function pricingPanel(p,oppT,st,line,games,mates){
+  const key=p.id+':'+st+':'+line, od=propOdds[key]||{};
+  const of=oppFactorFor(p,oppT,st,games);
+  const r=Model.price({games,stat:st,line,overOdds:od.o,underOdds:od.u,oppFactor:of.factor,mates});
+  const teammates=S.players.filter(x=>x.teamId===p.teamId&&x.id!==p.id&&(x.season?.MIN||0)>=12).sort((a,b)=>(b.season?.MIN||0)-(a.season?.MIN||0));
+  const sel=getMateSel(p);
+  const mateChips=teammates.map(x=>`<button class="pill ${sel.has(x.id)?'on':''}" data-mate="${x.id}">${esc(x.name)} ${injBadge(x.id)}</button>`).join('');
+  let h=`<div class="card" style="margin-top:14px"><div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Price it</h2>
+    <div class="row"><label class="t2">Over odds <input type="number" id="oddsO" step="0.01" min="1.01" placeholder="e.g. 1.87" value="${od.o??''}" style="width:96px"></label>
+    <label class="t2">Under odds <input type="number" id="oddsU" step="0.01" min="1.01" placeholder="optional" value="${od.u??''}" style="width:96px"></label></div></div>
+    <div class="t2" style="font-size:12.5px;margin-bottom:6px">Teammates out <span class="muted">(auto-ticked from the injury report · tap to change)</span></div>
+    <div class="row" style="gap:6px;margin-bottom:14px">${mateChips||'<span class="muted">–</span>'}</div>`;
+  if(!r){return h+`<div class="empty">Not enough games to project this player yet.</div></div>`}
+  const pr=r.proj, pb=r.probs, mk=r.market;
+  const evTxt=(x)=>x==null?'–':`<span class="${x>0?'up':'down'}">${x>0?'+':''}${(x*100).toFixed(1)}%</span>`;
+  const big=(k,v,sub)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="d muted">${sub||''}</div></div>`;
+  h+=`<div class="stats">
+    ${big('Projection',fmt(pr.mean),'± '+fmt(pr.sd)+' typical swing')}
+    ${big('Model over',pct(pb.over,0),'fair odds '+fmt(r.fairOver,2))}
+    ${big('Model under',pct(pb.under,0),'fair odds '+fmt(r.fairUnder,2))}
+    ${big('Book over',mk?pct(mk.over,0):'–',mk?(mk.twoWay?'margin removed ('+pct(mk.margin,1)+' margin)':'includes margin'):'enter odds')}
+    ${big('Edge over',r.over?.edge!=null?`<span class="${r.over.edge>0?'up':'down'}">${r.over.edge>0?'+':''}${(r.over.edge*100).toFixed(1)}</span>`:'–','% points vs book')}
+    ${big('EV over',evTxt(r.over?.ev),r.over?'per $1 · ¼ Kelly '+Math.max(0,r.over.kelly/4*100).toFixed(1)+'%':'')}
+    ${big('EV under',evTxt(r.under?.ev),r.under?'per $1 · ¼ Kelly '+Math.max(0,r.under.kelly/4*100).toFixed(1)+'%':'')}
+  </div>`;
+  // verdict
+  let verdict='Enter the bookie\'s odds to see if there\'s value.';
+  const best=[r.over&&['Over',r.over,od.o],r.under&&['Under',r.under,od.u]].filter(Boolean).sort((a,b)=>b[1].ev-a[1].ev)[0];
+  if(best){
+    const [side,x]=best;
+    verdict = x.ev>0.08 ? `⚠️ ${side} shows +${(x.ev*100).toFixed(1)}% — unusually big. Double-check injury news, minutes limits and that the line is current before trusting it.`
+      : x.ev>0.03 ? `✓ Value on the ${side}: +${(x.ev*100).toFixed(1)}% expected return.`
+      : x.ev>0 ? `Thin edge on the ${side} (+${(x.ev*100).toFixed(1)}%) — inside the model's error margin. Probably pass.`
+      : `No value — the bookie's price is better than the model's view on both sides.`;
+  }
+  const flags=[];
+  if(isOut(p.id)) flags.push(`${esc(p.name)} is listed <b>${esc(injOf(p.id).status)}</b>.`);
+  else if(isRisky(p.id)) flags.push(`${esc(p.name)} is listed <b>${esc(injOf(p.id).status)}</b> — minutes could be limited.`);
+  if(pr.sampleCurrent<8) flags.push(`Only ${pr.sampleCurrent} games this season — leaning on last season (weighted down).`);
+  if(mates.some(m=>!pr.mates.find(n=>n.name===m.name)?.n)) flags.push('No past games without some ticked teammates, so their absence isn\'t adjusted for.');
+  h+=`<div class="verdict">${verdict}</div>${flags.length?`<div class="note" style="color:var(--text-2)">⚠ ${flags.join(' ')}</div>`:''}`;
+  // breakdown
+  const mateLines=pr.mates.filter(m=>m.n).map(m=>`<li>Without ${esc(m.name)} (${m.n} games): minutes ×${fmt(m.minFactor,2)}, ${STATS[st].label.toLowerCase()} per minute ×${fmt(m.rateFactor,2)} <span class="muted">(raw ×${fmt(m.minRatio,2)} / ×${fmt(m.rateRatio,2)}, shrunk for sample size)</span></li>`).join('');
+  h+=`<details class="how"><summary>How this was calculated</summary><ol>
+    <li>Expected minutes: <b>${fmt(pr.baseMinutes)}</b> (recent games weighted most)${pr.factors.minutes!==1?` → <b>${fmt(pr.minutes)}</b> after teammates out`:''}</li>
+    <li>${STATS[st].label} per minute: <b>${fmt(pr.rate,3)}</b> over ${pr.sample} games (${pr.sampleCurrent} this season; last season counts 60%)</li>
+    ${mateLines}
+    <li>Opponent: ${oppT?`${esc(oppT.abbr)} vs ${esc(p.grp||'?')} ×${fmt(pr.factors.opp,3)}`+(of.parts.length?` <span class="muted">(${of.parts.map(x=>`${x.part.toUpperCase()} allowed ${fmt(x.allowed)} vs avg ${fmt(x.league)}`).join(', ')}; shrunk over ${of.gp} games)</span>`:''):'none selected'}</li>
+    <li>Projection = minutes × rate × adjustments = <b>${fmt(pr.mean,2)}</b></li>
+    <li>Spread: game-to-game variation from his logs, +15% for uncertainty, plus a 5% chance of a "dud" game (injury exit, foul trouble, blowout). Both tuned so that "95%" really hits ~95% in backtests.</li>
+    <li>P(over ${line}) = <b>${pct(pb.over,1)}</b>${pb.push>0.001?`, push ${pct(pb.push,1)}`:''}. EV = P(win) × (odds − 1) − P(lose).</li>
+  </ol><p class="note">Not included: confirmed starting lineups after the injury report, minutes restrictions, coaching changes, rest days. Treat the number as a starting point, not gospel.</p></details></div>`;
+  return h;
 }
 
 function barChart(games,val,line,oppT){
@@ -588,7 +720,115 @@ function teamDetail(t){
   <div class="card" style="margin-bottom:14px"><h2>Defence vs position</h2><div class="tw"><table><thead><tr><th class="l">Allowed / game</th>${['G','F','C'].map(g=>`<th>${g} season</th><th>${g} L10</th>`).join('')}</tr></thead><tbody>
   ${['PTS','REB','AST','FG3M','PRA'].map(s=>`<tr><td class="l" style="font-family:Inter">${s==='FG3M'?'3PM':s}</td>${['G','F','C'].map(g=>{const a=dvpFor(t.id,g,s),b=dvpFor(t.id,g,s,'l10');return `<td>${fmt(a?.val)} ${chip(a)}</td><td>${fmt(b?.val)} ${chip(b)}</td>`}).join('')}</tr>`).join('')}</tbody></table></div></div>
   <div class="card"><h2>Roster</h2><div class="tw"><table><thead><tr><th class="l">Player</th><th>Pos</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>Reb ch.</th><th>Pot. ast</th></tr></thead><tbody>
-  ${roster.map(p=>`<tr class="click" data-href="#/player/${p.id}"><td class="name">${esc(p.name)}</td><td>${esc(p.pos||'')}</td><td>${fmt(p.season?.MIN)}</td><td>${fmt(p.season?.PTS)}</td><td>${fmt(p.season?.REB)}</td><td>${fmt(p.season?.AST)}</td><td>${fmt(p.season?.FG3M)}</td><td>${fmt(p.track?.season?.REB_CHANCES)}</td><td>${fmt(p.track?.season?.POTENTIAL_AST)}</td></tr>`).join('')}</tbody></table></div></div>`;
+  ${roster.map(p=>`<tr class="click" data-href="#/player/${p.id}"><td class="name">${esc(p.name)} ${injBadge(p.id)}</td><td>${esc(p.pos||'')}</td><td>${fmt(p.season?.MIN)}</td><td>${fmt(p.season?.PTS)}</td><td>${fmt(p.season?.REB)}</td><td>${fmt(p.season?.AST)}</td><td>${fmt(p.season?.FG3M)}</td><td>${fmt(p.track?.season?.REB_CHANCES)}</td><td>${fmt(p.track?.season?.POTENTIAL_AST)}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+
+// ------------------------------------------------------------------ SAFE LEGS
+let safeTarget=store.get('safeTarget',0.95), safeStat=store.get('safeStat','ALL'), safeHideQ=store.get('safeHideQ',true);
+const SAFE_STATS=['PTS','REB','AST','PRA','PR','PA','RA','FG3M'];
+// alt-line ladders bookies actually offer ("10+" = over 9.5)
+const LADDER={PTS:[10,15,20,25,30,35,40],REB:[4,6,8,10,12,14],AST:[3,5,7,9,11],FG3M:[1,2,3,4,5],
+  PRA:[15,20,25,30,35,40,45,50],PR:[10,15,20,25,30,35,40],PA:[10,15,20,25,30,35,40],RA:[5,7,10,12,15]};
+S.safeCache={};
+function safeCandidates(games,target){
+  const key=games.map(g=>g.id).join(',')+'|'+target+'|'+(S.injSource||'')+Object.keys(S.inj||{}).length;
+  if(S.safeCache[key]) return S.safeCache[key];
+  const out=[];
+  games.forEach(g=>{[[g.away,g.home],[g.home,g.away]].forEach(([tid,opp])=>{
+    const oppT=S.teamById[opp], myT=S.teamById[tid];
+    const netGap=(myT?.adv?.NET_RATING??0)-(oppT?.adv?.NET_RATING??0);
+    const b2b=isB2B(g,tid);
+    S.players.filter(p=>p.teamId===tid&&(p.season?.MIN||0)>=24&&(p.season?.GP||0)>=5&&!isOut(p.id)).forEach(p=>{
+      const gm=allGames(p.id); const cur=gm.filter(x=>x.season==='current');
+      const m10=cur.slice(0,10).map(x=>x.min); const mAvg=m10.reduce((a,b)=>a+b,0)/m10.length;
+      const mSd=Math.sqrt(m10.reduce((a,b)=>a+(b-mAvg)**2,0)/m10.length);
+      const mates=matesOutFor(p);
+      SAFE_STATS.forEach(st=>{
+        const of=oppFactorFor(p,oppT,st,gm);
+        const pr=Model.project(gm,st,{oppFactor:of.factor,mates}); if(!pr) return;
+        let best=null;
+        for(const step of LADDER[st]){const L=step-0.5; const q=Model.projProbs(L,pr).over; if(q>=target) best={line:L,p:q}; else break}
+        if(!best) return;
+        const last20=gm.slice(0,20), hits=last20.filter(x=>STATS[st].f(x)>best.line).length;
+        const floor=Math.min(...gm.slice(0,15).map(x=>STATS[st].f(x)));
+        const flags=[];
+        if(isRisky(p.id)) flags.push(['q',injOf(p.id).status]);
+        if(b2b) flags.push(['w','Back-to-back']);
+        if(netGap>=8) flags.push(['w','Blowout risk (heavy favourite — starters may sit late)']);
+        if(mSd>5) flags.push(['w',`Minutes swing a lot (±${mSd.toFixed(0)})`]);
+        if(mates.length) flags.push(['i',`Adjusted for ${mates.map(m=>m.name).join(', ')} out`]);
+        out.push({p,g,opp:oppT,st,line:best.line,prob:best.p,mean:pr.mean,hits,n:last20.length,floor,flags,home:g.home===tid});
+      });
+    });
+  })});
+  out.sort((a,b)=>b.prob-a.prob || a.flags.filter(f=>f[0]!=='i').length-b.flags.filter(f=>f[0]!=='i').length);
+  return S.safeCache[key]=out;
+}
+function viewSafe(dateArg){
+  const dates=[...new Set(S.sched.map(g=>melDate(g.utc)))].sort();
+  if(!dates.length) return `<div class="card empty">No upcoming games loaded — run the updater to grab the schedule.</div>`;
+  const today=new Date().toLocaleDateString('en-CA',{timeZone:TZ});
+  const date=dateArg&&dates.includes(dateArg)?dateArg:(dates.find(d=>d>=today)||dates[dates.length-1]);
+  const games=S.sched.filter(g=>melDate(g.utc)===date);
+  let rows=safeCandidates(games,safeTarget);
+  if(safeStat!=='ALL') rows=rows.filter(r=>r.st===safeStat);
+  if(safeHideQ) rows=rows.filter(r=>!r.flags.some(f=>f[0]==='q'));
+  rows=rows.slice(0,80);
+  const flagHtml=f=>f.map(([k,t])=>`<span class="flag ${k}" data-tip="${esc(t)}">${k==='q'?'Q':k==='i'?'ⓘ':'⚠'}</span>`).join('');
+  return `<h1>Safe legs · ${melDay(date)}</h1>
+  <p class="sub">The highest line for each player and stat that the model rates at least ${Math.round(safeTarget*100)}% to go over. Compare <b>fair odds</b> with your bookie: if they offer more than fair, the leg is worth adding.</p>
+  <div class="row" style="margin-bottom:12px">${dates.map(d=>`<a class="pill ${d===date?'on':''}" href="#/safe/${d}">${melDay(d)}</a>`).join('')}</div>
+  <div class="card"><div class="row" style="justify-content:space-between;margin-bottom:10px">
+    <div class="row"><div class="seg" id="safeT">${[0.9,0.95,0.97].map(t=>`<button data-t="${t}" class="${t===safeTarget?'on':''}">${Math.round(t*100)}%+</button>`).join('')}</div>
+    <div class="seg" id="safeS">${['ALL',...SAFE_STATS].map(x=>`<button data-s="${x}" class="${x===safeStat?'on':''}">${x==='ALL'?'All':x==='FG3M'?'3PM':x}</button>`).join('')}</div></div>
+    <label class="t2"><input type="checkbox" id="safeQ" ${safeHideQ?'checked':''}> Hide questionable players</label></div>
+  ${rows.length?`<div class="tw"><table><thead><tr><th class="l">Player</th><th class="l">Game</th><th class="l">Leg</th><th>Model</th><th>Fair odds</th><th>Projection</th><th>L20 hit</th><th>Floor L15</th><th class="l">Flags</th></tr></thead><tbody>
+  ${rows.map(r=>`<tr class="click" data-href="#/player/${r.p.id}/${r.opp?.abbr||''}" data-safe="${r.st}:${r.line}">
+    <td class="name">${esc(r.p.name)} ${injBadge(r.p.id)} <span class="tag">${esc(r.p.team)}</span></td><td class="l">${r.home?'vs':'@'} ${esc(r.opp?.abbr||'')}</td>
+    <td class="l"><b>${r.line+0.5}+ ${r.st==='FG3M'?'3PM':r.st}</b> <span class="muted">(over ${r.line})</span></td>
+    <td>${pct(r.prob,1)}</td><td><b>${fmt(1/r.prob,3)}</b></td><td>${fmt(r.mean)}</td>
+    <td class="${r.hits===r.n?'up':r.hits/r.n<0.9?'down':''}">${r.hits}/${r.n}</td><td>${fmt(r.floor,0)}</td><td class="l">${flagHtml(r.flags)}</td></tr>`).join('')}</tbody></table></div>`
+  :`<div class="empty">Nothing clears ${Math.round(safeTarget*100)}% with these filters.</div>`}
+  <p class="note"><b>How to use:</b> a 1.01 leg needs the model to say about 99%+ to break even, so most 1.01 legs are slightly <i>negative</i>. They're only worth adding when the boost you unlock is bigger than that cost. Favour legs with no ⚠ flags, a floor above the line and a 20/20 hit record. Questionable players are hidden by default because an early injury exit counts as a loss at most bookies. Teammates listed Out are already factored in (ⓘ).</p></div>`;
+}
+
+// ------------------------------------------------------------------ MODEL CHECK
+function viewModel(){
+  const c=S.calib;
+  if(!c) return `<div class="card empty">Calibration results not found.</div>`;
+  const W=420,H=380,pl=44,pb=40,pt=12,pr=12;
+  const x=v=>pl+(W-pl-pr)*v, y=v=>H-pb-(H-pb-pt)*v;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:520px;display:block" role="img" aria-label="Predicted vs actual hit rate">`;
+  for(let i=0;i<=10;i+=2){const v=i/10; svg+=`<line x1="${x(0)}" x2="${x(1)}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${pl-6}" y="${y(v)+4}" font-size="11" text-anchor="end" fill="var(--muted)">${i*10}%</text><text x="${x(v)}" y="${H-pb+16}" font-size="11" text-anchor="middle" fill="var(--muted)">${i*10}%</text>`}
+  svg+=`<line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="var(--text-2)" stroke-width="1.5" stroke-dasharray="4 4"/>
+   <text x="${x(0.5)}" y="${H-6}" font-size="11.5" text-anchor="middle" fill="var(--text-2)">Model said</text>
+   <text transform="translate(12,${y(0.5)}) rotate(-90)" font-size="11.5" text-anchor="middle" fill="var(--text-2)">Actually hit</text>`;
+  const series=[['main','var(--s1)','Lines near the projection'],['alt','var(--s2)','Low alt lines (filler legs)']];
+  series.forEach(([k,col])=>{
+    const pts=c[k].buckets.filter(b=>b.n>=100);
+    svg+=`<polyline fill="none" stroke="${col}" stroke-width="2" points="${pts.map(b=>`${x(b.predicted)},${y(b.actual)}`).join(' ')}"/>`;
+    pts.forEach(b=>{svg+=`<circle cx="${x(b.predicted)}" cy="${y(b.actual)}" r="5" fill="${col}" stroke="var(--surface)" stroke-width="2" data-tip="Model said ${pct(b.predicted,1)}<br>Actually hit ${pct(b.actual,1)}<br>${b.n.toLocaleString()} predictions"/>`});
+  });
+  svg+='</svg>';
+  const v=c.validation;
+  const stat=(k,val,sub)=>`<div class="stat"><div class="k">${k}</div><div class="v">${val}</div><div class="d muted">${sub}</div></div>`;
+  const imp=s=>((1-s.brier/s.brierBaseline)*100).toFixed(1);
+  return `<h1>Model check</h1><p class="sub">Is the model honest? For every game this season and last, it predicted using <b>only the games before it</b>, then we checked what happened.</p>
+  <div class="grid g2"><div class="card"><h2>When the model says X%, how often does it hit?</h2>${svg}
+    <div class="legend">${series.map(([k,col,l])=>`<span><i style="background:${col}"></i>${l}</span>`).join('')}<span><i style="background:var(--text-2);height:2px"></i>Perfect calibration</span></div>
+    <p class="note">Dots on the dashed line = the percentages mean what they say. Hover a dot for the numbers.</p></div>
+  <div class="card"><h2>Headline numbers</h2><div class="stats">
+    ${stat('Predictions tested',c.all.n.toLocaleString(),'2 seasons, walk-forward')}
+    ${stat('"95%+" legs hit',pct(c.safe.actual,1),`model said ${pct(c.safe.predicted,1)} · n=${c.safe.n.toLocaleString()}`)}
+    ${v?stat('Unseen-season check',pct(v.safe.actual,1),`"95%+" on ${v.season} games not used for tuning (said ${pct(v.safe.predicted,1)}, n=${v.safe.n})`):''}
+    ${stat('vs "L10 hit rate"',imp(c.main)+'% better','Brier score, main lines (lower error)')}
+  </div>
+  <h2 style="margin-top:16px">By stat (main lines)</h2><div class="tw"><table><thead><tr><th class="l">Stat</th><th>Model error</th><th>L10 hit-rate error</th><th>Better by</th></tr></thead><tbody>
+  ${Object.entries(c.byStat).map(([k,s])=>`<tr><td class="l" style="font-family:Inter">${k==='FG3M'?'3PM':k}</td><td>${s.brier.toFixed(4)}</td><td>${s.brierBaseline.toFixed(4)}</td><td class="up">${imp(s)}%</td></tr>`).join('')}</tbody></table></div>
+  <p class="note">Brier score = average squared error of the probability (lower is better). Backtest excludes opponent and teammate-out adjustments, which can't be reconstructed for past games, so it tests the core projection. Last run ${c.generated?new Date(c.generated).toLocaleDateString('en-AU'):''}.</p></div></div>
+  <div class="card" style="margin-top:14px"><h2>What the model does and doesn't know</h2><div class="grid g2" style="gap:24px">
+    <div><b class="up">Accounts for</b><ul class="t2"><li>Recent minutes (fast-reacting) and per-minute production (two seasons, recent weighted)</li><li>Opponent defence vs the player's position, shrunk for small samples</li><li>Teammates ruled out, using his real past games without them</li><li>Game-to-game spread, plus the chance of a dud game (injury exit, foul trouble, blowout)</li><li>Injury report: live from ESPN each time you open the site</li></ul></div>
+    <div><b class="down">Doesn't know</b><ul class="t2"><li>Late scratches announced after the report, and confirmed starting lineups</li><li>Minutes restrictions, coach decisions, trades in the last day</li><li>Motivation, travel, altitude, referee tendencies</li><li>Live betting market moves — if the line has moved a lot, the market probably knows something</li></ul></div></div></div>`;
 }
 
 // ------------------------------------------------------------------ events
@@ -606,6 +846,18 @@ function bind(r){
   document.querySelectorAll('#propN button').forEach(b=>b.onclick=()=>{propN=+b.dataset.n;store.set('propN',propN);route()});
   const ps=$('#propStat'); if(ps) ps.onchange=()=>{propStat=ps.value;store.set('propStat',propStat);route()};
   const pl=$('#propLine'); if(pl) pl.onchange=()=>{const parts=location.hash.split('/'); propLines[parts[2]+':'+propStat]=parseFloat(pl.value); store.set('propLines',propLines); route()};
+  const saveOdds=()=>{const parts=location.hash.split('/'); const p=S.byId[parts[2]]; if(!p) return;
+    const line=propLines[p.id+':'+propStat]??defaultLine(p,propStat); const key=p.id+':'+propStat+':'+line;
+    const o=parseFloat($('#oddsO').value), u=parseFloat($('#oddsU').value);
+    propOdds[key]={o:o>1?o:undefined,u:u>1?u:undefined}; store.set('propOdds',propOdds); route()};
+  ['#oddsO','#oddsU'].forEach(id=>{const el=$(id); if(el) el.onchange=saveOdds});
+  document.querySelectorAll('[data-mate]').forEach(b=>b.onclick=()=>{const parts=location.hash.split('/'); const p=S.byId[parts[2]]; const sel=getMateSel(p);
+    const id=+b.dataset.mate; sel.has(id)?sel.delete(id):sel.add(id); route()});
+  document.querySelectorAll('#safeT button').forEach(b=>b.onclick=()=>{safeTarget=+b.dataset.t;store.set('safeTarget',safeTarget);route()});
+  document.querySelectorAll('#safeS button').forEach(b=>b.onclick=()=>{safeStat=b.dataset.s;store.set('safeStat',safeStat);route()});
+  const sq=$('#safeQ'); if(sq) sq.onchange=()=>{safeHideQ=sq.checked;store.set('safeHideQ',safeHideQ);route()};
+  document.querySelectorAll('[data-safe]').forEach(el=>el.onclick=()=>{const [st,l]=el.dataset.safe.split(':'); const pid=el.dataset.href.split('/')[2];
+    propStat=st; store.set('propStat',st); propLines[pid+':'+st]=+l; store.set('propLines',propLines); location.hash=el.dataset.href});
   const op=$('#oppPick'); if(op) op.onchange=()=>{const parts=location.hash.split('/'); location.hash=`#/player/${parts[2]}/${op.value}`};
   // search
   const inp=$('#psearch'), sg=$('#sugg');
