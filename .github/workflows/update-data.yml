@@ -1,10 +1,11 @@
 name: Update NBA data
 
+# NBA.com blocks GitHub's servers, so the schedule is off and data is pulled
+# from your own computer (see README). Re-enable the schedule only if you add
+# an NBA_PROXY secret that works.
 on:
-  schedule:
-    # 10:17 UTC = ~9pm Melbourne (after US games + overnight stat updates)
-    # 20:17 UTC = ~7am Melbourne (refreshes schedule before tip-off)
-    - cron: "17 10,20 * * *"
+  # schedule:
+  #   - cron: "17 10,20 * * *"
   workflow_dispatch: {}
 
 permissions:

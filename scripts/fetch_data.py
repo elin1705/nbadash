@@ -394,6 +394,19 @@ def main():
     prev = season_str(datetime(int(season[:4]) - 1, 12, 1))
     log(f"Season {season} (previous {prev})")
 
+    # Quick reachability check so a blocked machine fails in seconds, not 40 minutes
+    try:
+        requests.get("https://stats.nba.com/stats/leaguegamelog",
+                     params={"Season": season, "SeasonType": "Regular Season", "PlayerOrTeam": "T",
+                             "LeagueID": "00", "Direction": "DESC", "Sorter": "DATE", "Counter": 0},
+                     headers=HEADERS, timeout=25,
+                     proxies={"https": PROXY, "http": PROXY} if PROXY else None).raise_for_status()
+        log("NBA.com reachable")
+    except Exception as e:  # noqa: BLE001
+        log(f"NBA.com is not responding from this machine ({type(e).__name__}). "
+            "It blocks most cloud servers — run this script on your own computer instead.")
+        sys.exit(2)
+
     positions = get_positions(season) or {}
     ps = get_player_stats(season)
     tracking = get_tracking(season) or {}
