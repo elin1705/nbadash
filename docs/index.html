@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache">
 <title>NBA Props Dash</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
@@ -165,7 +166,7 @@ svg text{font-family:Inter,system-ui,sans-serif}
 <main id="app"><div class="empty">Loading data…</div></main>
 <div id="tip"></div>
 
-<script src="model.js"></script>
+<script>/* always load the newest model, never a cached copy */document.write('<script src="model.js?v='+Date.now()+'"><\/script>')</script>
 <script>
 // ------------------------------------------------------------------ state
 const S = { players:[], teams:[], logs:null, sched:[], matchups:null, meta:null,
