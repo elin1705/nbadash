@@ -497,8 +497,8 @@ function pricingPanel(p,oppT,st,line,games,mates){
     ${big('Model under',pct(pb.under,0),'fair odds '+fmt(r.fairUnder,2))}
     ${big('Book over',mk?pct(mk.over,0):'–',mk?(mk.twoWay?'margin removed ('+pct(mk.margin,1)+' margin)':'includes margin'):'enter odds')}
     ${big('Edge over',r.over?.edge!=null?`<span class="${r.over.edge>0?'up':'down'}">${r.over.edge>0?'+':''}${(r.over.edge*100).toFixed(1)}</span>`:'–','% points vs book')}
-    ${big('EV over',evTxt(r.over?.ev),r.over?'per $1 · ¼ Kelly '+Math.max(0,r.over.kelly/4*100).toFixed(1)+'%':'')}
-    ${big('EV under',evTxt(r.under?.ev),r.under?'per $1 · ¼ Kelly '+Math.max(0,r.under.kelly/4*100).toFixed(1)+'%':'')}
+    ${big('EV over',evTxt(r.over?.ev),r.over?'per $1 · quarter-Kelly '+Math.max(0,r.over.kelly/4*100).toFixed(1)+'%':'')}
+    ${big('EV under',evTxt(r.under?.ev),r.under?'per $1 · quarter-Kelly '+Math.max(0,r.under.kelly/4*100).toFixed(1)+'%':'')}
   </div>`;
   // verdict
   let verdict='Enter the bookie\'s odds to see if there\'s value.';
