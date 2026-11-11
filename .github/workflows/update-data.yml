@@ -1,0 +1,49 @@
+name: Update NBA data
+
+on:
+  schedule:
+    # 10:17 UTC = ~9pm Melbourne (after US games + overnight stat updates)
+    # 20:17 UTC = ~7am Melbourne (refreshes schedule before tip-off)
+    - cron: "17 10,20 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Fetch data
+        env:
+          NBA_PROXY: ${{ secrets.NBA_PROXY }}
+        run: python scripts/fetch_data.py
+
+      - name: Commit data
+        if: always()
+        run: |
+          git config user.name "nbadash-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/data
+          if git diff --cached --quiet; then
+            echo "No data changes"
+          else
+            git commit -m "Update NBA data $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git pull --rebase origin main
+            git push
+          fi
