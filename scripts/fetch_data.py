@@ -27,6 +27,7 @@ from nba_api.stats.endpoints import (
     leaguegamelog,
     leagueseasonmatchups,
     playerindex,
+    scoreboardv3,
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -260,31 +261,63 @@ def get_matchups(season, team_ids, min_poss):
     return out
 
 
-@section("Schedule")
-def get_schedule():
+def _game(g, t):
+    return {
+        "id": g["gameId"], "utc": t, "status": g.get("gameStatusText"),
+        "home": g["homeTeam"]["teamId"], "away": g["awayTeam"]["teamId"],
+        "homeTri": g["homeTeam"].get("teamTricode"), "awayTri": g["awayTeam"].get("teamTricode"),
+        "homeScore": g["homeTeam"].get("score"), "awayScore": g["awayTeam"].get("score"),
+    }
+
+
+def _schedule_cdn(lo, hi):
     url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
-    resp = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": HEADERS["User-Agent"]},
-                        proxies={"https": PROXY, "http": PROXY} if PROXY else None)
+    resp = requests.get(url, timeout=TIMEOUT, headers={
+        "User-Agent": HEADERS["User-Agent"], "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.nba.com/", "Origin": "https://www.nba.com"},
+        proxies={"https": PROXY, "http": PROXY} if PROXY else None)
     resp.raise_for_status()
-    data = resp.json()
-    now = datetime.now(timezone.utc)
-    lo, hi = now - timedelta(hours=14), now + timedelta(days=4)
     games = []
-    for gd in data["leagueSchedule"]["gameDates"]:
+    for gd in resp.json()["leagueSchedule"]["gameDates"]:
         for g in gd["games"]:
             t = g.get("gameDateTimeUTC")
-            if not t:
+            if not t or not g["homeTeam"].get("teamId") or not g["awayTeam"].get("teamId"):
                 continue
-            dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
-            if lo <= dt <= hi and g["homeTeam"].get("teamId") and g["awayTeam"].get("teamId"):
-                games.append({
-                    "id": g["gameId"], "utc": t, "status": g.get("gameStatusText"),
-                    "home": g["homeTeam"]["teamId"], "away": g["awayTeam"]["teamId"],
-                    "homeTri": g["homeTeam"].get("teamTricode"), "awayTri": g["awayTeam"].get("teamTricode"),
-                    "homeScore": g["homeTeam"].get("score"), "awayScore": g["awayTeam"].get("score"),
-                })
-    games.sort(key=lambda g: g["utc"])
+            if lo <= datetime.fromisoformat(t.replace("Z", "+00:00")) <= hi:
+                games.append(_game(g, t))
     return games
+
+
+def _schedule_scoreboard(now):
+    """Backup: ask stats.nba.com's scoreboard for each US date over the next few days."""
+    games = []
+    us_today = (now - timedelta(hours=5)).date()  # roughly US Eastern
+    for i in range(-1, 4):
+        d = (us_today + timedelta(days=i)).isoformat()
+        data = call(scoreboardv3.ScoreboardV3, f"scoreboard {d}", game_date=d)
+        for g in (data.get("scoreboard") or {}).get("games", []):
+            t = g.get("gameTimeUTC")
+            if t and g["homeTeam"].get("teamId"):
+                games.append(_game(g, t))
+    return games
+
+
+@section("Schedule")
+def get_schedule():
+    now = datetime.now(timezone.utc)
+    lo, hi = now - timedelta(hours=14), now + timedelta(days=4)
+    try:
+        games = _schedule_cdn(lo, hi)
+    except Exception as e:  # noqa: BLE001
+        log(f"  CDN schedule unavailable ({e}); using scoreboard instead")
+        games = [g for g in _schedule_scoreboard(now)
+                 if lo <= datetime.fromisoformat(g["utc"].replace("Z", "+00:00")) <= hi]
+    seen, out = set(), []
+    for g in sorted(games, key=lambda g: g["utc"]):
+        if g["id"] not in seen:
+            seen.add(g["id"])
+            out.append(g)
+    return out
 
 
 # ---------------------------------------------------------------- derived
