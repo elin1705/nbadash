@@ -48,7 +48,9 @@ header{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 8
 .bar{max-width:1240px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .brand{font-weight:700;letter-spacing:-.02em;font-size:17px;display:flex;align-items:center;gap:8px}
 .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--s2)}
-nav{display:flex;gap:4px}
+nav{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;max-width:100%;flex-wrap:nowrap}
+nav::-webkit-scrollbar{display:none}
+nav a{white-space:nowrap;flex:none}
 nav a{padding:6px 12px;border-radius:999px;color:var(--text-2);font-weight:500}
 nav a.on{background:var(--surface);color:var(--text);box-shadow:0 0 0 1px var(--ring)}
 .spacer{flex:1}
@@ -133,7 +135,16 @@ svg text{font-family:Inter,system-ui,sans-serif}
 #tip{position:fixed;pointer-events:none;z-index:50;background:var(--text);color:var(--surface);padding:7px 9px;border-radius:8px;font-size:12px;line-height:1.4;opacity:0;transition:opacity .08s;max-width:240px}
 #tip b{font-weight:600}
 .note{font-size:12px;color:var(--muted);margin-top:8px}
-@media (max-width:640px){.phead .nm{font-size:22px} .bar{gap:8px} .updated{display:none}}
+@media (max-width:640px){.phead .nm{font-size:22px} .bar{gap:8px} .updated{display:none}
+  .bar{flex-wrap:nowrap} .brand{flex:none} nav{flex:1;min-width:0} .spacer{display:none}
+  .calc thead{display:none} .calc table,.calc tbody{display:block}
+  .calc tr{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 8px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .calc td{border:0;padding:2px 0;text-align:left!important;white-space:normal}
+  .calc td.name{grid-column:1/-1;display:flex;justify-content:space-between;align-items:baseline}
+  .calc td[data-l]::before{content:attr(data-l);display:block;font-size:10.5px;color:var(--muted);font-family:Inter,sans-serif;text-transform:uppercase;letter-spacing:.04em}
+  .calc td input,.calc td select{width:100%!important}
+  .calc td.del{grid-column:4;text-align:right!important}
+}
 </style>
 </head>
 <body>
@@ -143,6 +154,7 @@ svg text{font-family:Inter,system-ui,sans-serif}
     <a href="#/today" data-r="today">Today</a>
     <a href="#/player" data-r="player">Players</a>
     <a href="#/teams" data-r="teams">Teams &amp; DvP</a>
+    <a href="#/calc" data-r="calc">Bet calculator</a>
     <a href="#/safe" data-r="safe">Safe legs</a>
     <a href="#/model" data-r="model">Model check</a>
   </nav>
@@ -300,6 +312,7 @@ function route(){
   const banner=errBanner();
   if(r==='player') app.innerHTML=banner+viewPlayer(rest[0],rest[1]);
   else if(r==='teams') app.innerHTML=banner+viewTeams(rest[0]);
+  else if(r==='calc') app.innerHTML=banner+viewCalc();
   else if(r==='safe') app.innerHTML=banner+viewSafe(rest[0]);
   else if(r==='model') app.innerHTML=banner+viewModel();
   else app.innerHTML=banner+viewToday(rest[0]);
@@ -723,6 +736,78 @@ function teamDetail(t){
   ${roster.map(p=>`<tr class="click" data-href="#/player/${p.id}"><td class="name">${esc(p.name)} ${injBadge(p.id)}</td><td>${esc(p.pos||'')}</td><td>${fmt(p.season?.MIN)}</td><td>${fmt(p.season?.PTS)}</td><td>${fmt(p.season?.REB)}</td><td>${fmt(p.season?.AST)}</td><td>${fmt(p.season?.FG3M)}</td><td>${fmt(p.track?.season?.REB_CHANCES)}</td><td>${fmt(p.track?.season?.POTENTIAL_AST)}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
 
+// ------------------------------------------------------------------ BET CALCULATOR
+let slip=store.get('slip',[]), slipBoost=store.get('slipBoost','');
+function priceLeg(leg){
+  const p=S.byId[leg.pid]; if(!p) return null;
+  const ng=nextGameFor(p.teamId); const oppT=ng?S.teamById[oppOf(ng,p.teamId)]:null;
+  const games=allGames(p.id);
+  const of=oppFactorFor(p,oppT,leg.stat,games);
+  const mates=matesOutFor(p);
+  const proj=Model.project(games,leg.stat,{oppFactor:of.factor,mates}); if(!proj) return {p,ng,oppT,proj:null};
+  const pr=Model.projProbs(leg.line,proj,!!Model.STATS[leg.stat].continuous);
+  const pWin=leg.side==='under'?pr.under:pr.over;
+  const odds=leg.odds>1?leg.odds:null;
+  const implied=odds?1/odds:null;
+  return {p,ng,oppT,proj,pWin,pPush:pr.push,odds,implied,fair:1/pWin,edge:implied!=null?pWin-implied:null,
+    ev:odds?Model.expectedValue(pWin,odds,pr.push):null,mates};
+}
+function viewCalc(){
+  const evS=x=>x==null?'–':`<span class="${x>0?'up':'down'}">${x>0?'+':''}${(x*100).toFixed(1)}%</span>`;
+  const legs=slip.map((l,i)=>({l,i,r:priceLeg(l)}));
+  const rows=legs.map(({l,i,r})=>{
+    if(!r) return `<tr><td class="name l" colspan="10">Player not found <button class="pill" data-del="${i}">Remove</button></td></tr>`;
+    const p=r.p;
+    return `<tr>
+      <td class="name"><span><a href="#/player/${p.id}${r.oppT?'/'+r.oppT.abbr:''}">${esc(p.name)}</a> ${injBadge(p.id)}</span><span class="muted" style="font-weight:400;font-size:11.5px">${esc(p.team)} ${r.ng?(r.ng.home===p.teamId?'vs ':'@ ')+esc(r.oppT?.abbr||''):'· no game found'}</span></td>
+      <td class="l" data-l="Stat"><select data-leg="${i}" data-k="stat">${Object.entries(Model.STATS).map(([k,v])=>`<option value="${k}" ${k===l.stat?'selected':''} title="${v.label}">${k==='FG3M'?'3PM':k}</option>`).join('')}</select></td>
+      <td class="l" data-l="Side"><select data-leg="${i}" data-k="side"><option value="over" ${l.side==='over'?'selected':''}>Over</option><option value="under" ${l.side==='under'?'selected':''}>Under</option></select></td>
+      <td class="l" data-l="Line"><input type="number" inputmode="decimal" step="0.5" data-leg="${i}" data-k="line" value="${l.line}" style="width:76px"></td>
+      <td class="l" data-l="Odds"><input type="number" inputmode="decimal" step="0.01" min="1.01" data-leg="${i}" data-k="odds" value="${l.odds??''}" placeholder="odds" style="width:80px"></td>
+      <td data-l="Proj.">${r.proj?fmt(r.proj.mean):'–'}</td>
+      <td data-l="Model"><b>${r.proj?pct(r.pWin,1):'–'}</b></td>
+      <td data-l="Fair odds">${r.proj?fmt(r.fair,2):'–'}</td>
+      <td data-l="Book">${r.implied!=null?pct(r.implied,1):'–'}</td>
+      <td data-l="Edge">${r.edge!=null?`<span class="${r.edge>0?'up':'down'}">${r.edge>0?'+':''}${(r.edge*100).toFixed(1)}</span>`:'–'}</td>
+      <td data-l="EV">${evS(r.ev)}${r.ev>0.08?` <span class="flag w" data-tip="Unusually big edge. Check injury news, minutes limits and that the line/odds are current before trusting it.">⚠</span>`:''}</td>
+      <td class="del"><button class="iconbtn" data-del="${i}" title="Remove leg">✕</button></td></tr>`;
+  }).join('');
+  // multi
+  let multi='';
+  const priced=legs.filter(x=>x.r&&x.r.proj&&x.r.odds);
+  if(legs.length>=2){
+    if(priced.length===legs.length){
+      const pAll=priced.reduce((a,x)=>a*x.r.pWin,1);
+      const odds=priced.reduce((a,x)=>a*x.r.odds,1);
+      const b=parseFloat(slipBoost)||0;
+      const boosted=1+(odds-1)*(1+b/100);
+      const ev=pAll*boosted-1, evNo=pAll*odds-1;
+      const games=priced.map(x=>x.r.ng?.id).filter(Boolean);
+      const sameGame=games.length!==new Set(games).size;
+      const breakEven=pAll>0?((1/pAll-1)/(odds-1)-1)*100:null;
+      multi=`<div class="card" style="margin-top:14px"><div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Multi (${priced.length} legs)</h2>
+        <label class="t2">Boost on winnings <input type="number" id="slipBoost" step="1" min="0" placeholder="0" value="${esc(slipBoost)}" style="width:70px"> %</label></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Combined odds</div><div class="v">${fmt(odds,2)}</div><div class="d muted">${b?'boosted '+fmt(boosted,2):'no boost'}</div></div>
+          <div class="stat"><div class="k">Model: all hit</div><div class="v">${pct(pAll,1)}</div><div class="d muted">fair odds ${fmt(1/pAll,2)}</div></div>
+          <div class="stat"><div class="k">Book implied</div><div class="v">${pct(1/odds,1)}</div><div class="d muted">incl. margin on every leg</div></div>
+          <div class="stat"><div class="k">EV no boost</div><div class="v">${evS(evNo)}</div><div class="d muted">per $1</div></div>
+          <div class="stat"><div class="k">EV with boost</div><div class="v">${evS(ev)}</div><div class="d muted">per $1</div></div>
+          <div class="stat"><div class="k">Boost to break even</div><div class="v">${breakEven!=null&&breakEven>0?fmt(breakEven,0)+'%':'none needed'}</div><div class="d muted">on winnings</div></div>
+        </div>
+        <div class="verdict">${ev>0.03?`✓ Positive with the boost: +${(ev*100).toFixed(1)}% expected return.`:ev>0?`Roughly break-even with the boost (+${(ev*100).toFixed(1)}%) — inside the model's error.`:`Negative even with the boost (${(ev*100).toFixed(1)}%). ${breakEven>0?`You'd need about a ${fmt(breakEven,0)}% boost to break even.`:''}`}</div>
+        ${sameGame?`<p class="note" style="color:var(--text-2)">⚠ Two or more legs are from the same game. Their results are linked (e.g. a blowout hurts every starter), so the true chance of all hitting can differ from this — and same-game multis are usually priced with extra margin.</p>`:''}
+        <p class="note">Assumes legs are independent. Filler legs: each one multiplies the model chance — four 97% legs together is only ${pct(Math.pow(.97,4),0)}.</p></div>`;
+    } else multi=`<p class="note">Add odds to every leg to price the multi.</p>`;
+  }
+  return `<h1>Bet calculator</h1><p class="sub">Type any line — main or alt — and the bookie's odds. Edge = model probability minus the book's implied probability (with its margin still in, since you're only entering one side).</p>
+  <div class="card"><div class="row" style="margin-bottom:12px"><div class="searchwrap" style="flex:1"><input type="text" id="psearch" placeholder="Add a leg — search a player…" autocomplete="off" style="width:100%"><div class="sugg" id="sugg" hidden></div></div>
+    ${slip.length?'<button class="pill" id="slipClear">Clear all</button>':''}</div>
+  ${slip.length?`<div class="tw calc"><table><thead><tr><th class="l">Player</th><th class="l">Stat</th><th class="l">Side</th><th class="l">Line</th><th class="l">Odds</th><th>Proj.</th><th>Model</th><th>Fair odds</th><th>Book</th><th>Edge</th><th>EV</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="note">Projection includes tonight's opponent and any teammates listed out. Tap a name for the full breakdown.</p>`
+  :`<div class="empty">Search a player above to add your first leg.</div>`}</div>${multi}`;
+}
+
 // ------------------------------------------------------------------ SAFE LEGS
 let safeTarget=store.get('safeTarget',0.95), safeStat=store.get('safeStat','ALL'), safeHideQ=store.get('safeHideQ',true);
 const SAFE_STATS=['PTS','REB','AST','PRA','PR','PA','RA','FG3M'];
@@ -858,16 +943,23 @@ function bind(r){
   const sq=$('#safeQ'); if(sq) sq.onchange=()=>{safeHideQ=sq.checked;store.set('safeHideQ',safeHideQ);route()};
   document.querySelectorAll('[data-safe]').forEach(el=>el.onclick=()=>{const [st,l]=el.dataset.safe.split(':'); const pid=el.dataset.href.split('/')[2];
     propStat=st; store.set('propStat',st); propLines[pid+':'+st]=+l; store.set('propLines',propLines); location.hash=el.dataset.href});
+  document.querySelectorAll('[data-leg]').forEach(el=>el.onchange=()=>{const i=+el.dataset.leg,k=el.dataset.k; let v=el.value;
+    if(k==='line') v=parseFloat(v); if(k==='odds') v=parseFloat(v)>1?parseFloat(v):null;
+    slip[i][k]=v; if(k==='stat'){const p=S.byId[slip[i].pid]; slip[i].line=defaultLine(p,v)} store.set('slip',slip); route()});
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{slip.splice(+b.dataset.del,1); store.set('slip',slip); route()});
+  const sc=$('#slipClear'); if(sc) sc.onclick=()=>{slip=[]; store.set('slip',slip); route()};
+  const sb=$('#slipBoost'); if(sb) sb.onchange=()=>{slipBoost=sb.value; store.set('slipBoost',slipBoost); route()};
   const op=$('#oppPick'); if(op) op.onchange=()=>{const parts=location.hash.split('/'); location.hash=`#/player/${parts[2]}/${op.value}`};
   // search
   const inp=$('#psearch'), sg=$('#sugg');
   if(inp){
     let act=0, res=[];
     const render=()=>{sg.hidden=!res.length; sg.innerHTML=res.map((p,i)=>`<div class="${i===act?'act':''}" data-id="${p.id}"><span>${esc(p.name)}</span><span class="muted">${esc(p.team)}</span></div>`).join('');
-      sg.querySelectorAll('div').forEach(d=>d.onmousedown=()=>location.hash='#/player/'+d.dataset.id)};
-    inp.oninput=()=>{const q=inp.value.trim().toLowerCase(); act=0;
-      res=q?S.players.filter(p=>p.name.toLowerCase().includes(q)).sort((a,b)=>(b.season?.MIN||0)-(a.season?.MIN||0)).slice(0,10):[]; render()};
-    inp.onkeydown=e=>{if(e.key==='ArrowDown'){act=Math.min(act+1,res.length-1);render();e.preventDefault()} else if(e.key==='ArrowUp'){act=Math.max(act-1,0);render();e.preventDefault()} else if(e.key==='Enter'&&res[act]) location.hash='#/player/'+res[act].id};
+      sg.querySelectorAll('div').forEach(d=>d.onmousedown=()=>pick(d.dataset.id))};
+    inp.oninput=()=>{const q=normName(inp.value); act=0;
+      res=q?S.players.filter(p=>normName(p.name).includes(q)).sort((a,b)=>(b.season?.MIN||0)-(a.season?.MIN||0)).slice(0,10):[]; render()};
+    const pick=id=>{ if(r==='calc'){const p=S.byId[id]; slip.push({pid:p.id,stat:'PTS',side:'over',line:defaultLine(p,'PTS'),odds:null}); store.set('slip',slip); route(); setTimeout(()=>{const ins=document.querySelectorAll('[data-k="odds"]'); ins[ins.length-1]?.focus()},0)} else location.hash='#/player/'+id };
+    inp.onkeydown=e=>{if(e.key==='ArrowDown'){act=Math.min(act+1,res.length-1);render();e.preventDefault()} else if(e.key==='ArrowUp'){act=Math.max(act-1,0);render();e.preventDefault()} else if(e.key==='Enter'&&res[act]) pick(res[act].id)};
     inp.onblur=()=>setTimeout(()=>sg.hidden=true,150);
     if(r==='player'&&!location.hash.split('/')[2]) inp.focus();
   }
