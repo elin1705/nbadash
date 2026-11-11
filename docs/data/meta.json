@@ -1,0 +1,1 @@
+{"updated":"2026-11-11T09:42:57.196762+00:00","season":"2026-27","previous":"2025-26","errors":[{"section":"Schedule","error":"HTTPError: 403 Client Error: Forbidden for url: https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"}],"ok":true,"counts":{"players":462,"teams":30,"games_today":0}}
