@@ -289,11 +289,14 @@ function stakeFor(p,odds,push=0){
   const capped=units>cap; units=Math.min(units,cap);
   units=Math.round(units*10)/10;
   const unitVal=stakeCfg.bankroll*stakeCfg.unitPct/100;
-  return {units,dollars:units*unitVal,full,fullDollars:full*unitVal,pAdj,evAdj:pAdj*(odds-1)-(1-pAdj-push),capped,suspicious};
+  // stake if you skip the haircut (shown when the haircut turns a thin edge into a pass)
+  let raw=Math.max(0,Model.kelly(p,odds,push)*stakeCfg.kf/100)*100/stakeCfg.unitPct;
+  raw=Math.round(Math.min(raw,stakeCfg.maxU)*10)/10;
+  return {units,dollars:units*unitVal,raw,rawDollars:raw*unitVal,full,fullDollars:full*unitVal,pAdj,evAdj:pAdj*(odds-1)-(1-pAdj-push),capped,suspicious};
 }
 function stakeTxt(st){
   if(!st) return '';
-  if(st.units<=0) return 'stake: pass';
+  if(st.units<=0) return st.raw>0?`stake <b>0u (pass)</b> · without haircut ${st.raw.toFixed(1)}u ($${st.rawDollars.toFixed(2)})`:'stake <b>0u (pass)</b>';
   return `stake <b>${st.units.toFixed(1)}u</b> ($${st.dollars.toFixed(2)})${st.suspicious?(st.full>st.units?` · uncapped ${st.full.toFixed(1)}u ($${st.fullDollars.toFixed(2)})`:'')+' · check first':st.capped?' · capped':''}`;
 }
 function stakeSettings(){
@@ -802,7 +805,7 @@ function viewCalc(){
       <td data-l="Book">${r.implied!=null?pct(r.implied,1):'–'}</td>
       <td data-l="Edge">${r.edge!=null?`<span class="${r.edge>0?'up':'down'}">${r.edge>0?'+':''}${(r.edge*100).toFixed(1)}</span>`:'–'}</td>
       <td data-l="EV">${evS(r.ev)}${r.ev>0.08?` <span class="flag w" data-tip="Unusually big edge. Check injury news, minutes limits and that the line/odds are current before trusting it.">⚠</span>`:''}</td>
-      <td data-l="Stake">${(()=>{const st=r.proj&&r.odds?stakeFor(r.pWin,r.odds,r.pPush):null; return st?(st.units>0?`<b>${st.units.toFixed(1)}u</b><div class="muted" style="font-size:11px">$${st.dollars.toFixed(2)}${st.suspicious&&st.full>st.units?`<br>uncapped ${st.full.toFixed(1)}u`:''}</div>`:'<span class="muted">pass</span>'):'–'})()}</td>
+      <td data-l="Stake">${(()=>{const st=r.proj&&r.odds?stakeFor(r.pWin,r.odds,r.pPush):null; return st?(st.units>0?`<b>${st.units.toFixed(1)}u</b><div class="muted" style="font-size:11px">$${st.dollars.toFixed(2)}${st.suspicious&&st.full>st.units?`<br>uncapped ${st.full.toFixed(1)}u`:''}</div>`:`<b>0u</b><div class="muted" style="font-size:11px">pass${st.raw>0?`<br>no haircut ${st.raw.toFixed(1)}u`:''}</div>`):'–'})()}</td>
       <td class="del"><button class="iconbtn" data-del="${i}" title="Remove leg">✕</button></td></tr>`;
   }).join('');
   // multi
